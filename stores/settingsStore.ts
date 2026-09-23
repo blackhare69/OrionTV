@@ -109,6 +109,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     });
     if ( currentApiBaseUrl !== processedApiBaseUrl) {
       await AsyncStorage.setItem('authCookies', '');
+      await AsyncStorage.removeItem('authCookiesBaseUrl');
     }
     api.setBaseUrl(processedApiBaseUrl);
     // Also update the URL in the state so the input field shows the processed URL
@@ -118,3 +119,4 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   showModal: () => set({ isModalVisible: true }),
   hideModal: () => set({ isModalVisible: false }),
 }));
+
