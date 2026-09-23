@@ -2,7 +2,6 @@ import { create } from "zustand";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { api } from "@/services/api";
 import { useSettingsStore } from "./settingsStore";
-import Toast from "react-native-toast-message";
 import Logger from "@/utils/Logger";
 
 const logger = Logger.withTag('AuthStore');
@@ -13,6 +12,7 @@ interface AuthState {
   showLoginModal: () => void;
   hideLoginModal: () => void;
   checkLoginStatus: (apiBaseUrl?: string) => Promise<void>;
+  login: (username: string | undefined, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -50,10 +50,9 @@ const useAuthStore = create<AuthState>((set) => ({
       }
 
       if (!serverConfig?.StorageType) {
-        // Only show error if we're not loading and have tried to fetch the config
-        if (!settingsState.isLoadingServerConfig) {
-          Toast.show({ type: "error", text1: "请检查网络或者服务器地址是否可用" });
-        }
+        // Some servers protect server-config itself. Let the user authenticate
+        // before retrying it, without inventing a storage type.
+        set({ isLoggedIn: false, isLoginModalVisible: true });
         return;
       }
 
@@ -64,7 +63,7 @@ const useAuthStore = create<AuthState>((set) => ({
             set({ isLoggedIn: false, isLoginModalVisible: true });
           });
           if (loginResult && loginResult.ok) {
-            set({ isLoggedIn: true });
+            set({ isLoggedIn: true, isLoginModalVisible: false });
           }
         } else {
           set({ isLoggedIn: false, isLoginModalVisible: true });
@@ -81,14 +80,25 @@ const useAuthStore = create<AuthState>((set) => ({
       }
     }
   },
+  login: async (username, password) => {
+    set({ isLoggedIn: false });
+    await api.login(username, password);
+    await useSettingsStore.getState().fetchServerConfig();
+    if (!useSettingsStore.getState().serverConfig?.StorageType) {
+      throw new Error("登录后仍无法获取服务器配置，请检查服务器状态");
+    }
+    set({ isLoggedIn: true, isLoginModalVisible: false });
+  },
   logout: async () => {
     try {
       await api.logout();
-      set({ isLoggedIn: false, isLoginModalVisible: true });
     } catch (error) {
       logger.error("Failed to logout:", error);
+    } finally {
+      set({ isLoggedIn: false, isLoginModalVisible: true });
     }
   },
 }));
 
 export default useAuthStore;
+

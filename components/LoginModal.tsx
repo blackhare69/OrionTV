@@ -5,15 +5,14 @@ import Toast from "react-native-toast-message";
 import useAuthStore from "@/stores/authStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import useHomeStore from "@/stores/homeStore";
-import { api } from "@/services/api";
 import { LoginCredentialsManager } from "@/services/storage";
 import { ThemedView } from "./ThemedView";
 import { ThemedText } from "./ThemedText";
 import { StyledButton } from "./StyledButton";
 
 const LoginModal = () => {
-  const { isLoginModalVisible, hideLoginModal, checkLoginStatus } = useAuthStore();
-  const { serverConfig, apiBaseUrl } = useSettingsStore();
+  const { isLoginModalVisible, hideLoginModal, login } = useAuthStore();
+  const { serverConfig } = useSettingsStore();
   const { refreshPlayRecords } = useHomeStore();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -80,14 +79,13 @@ const LoginModal = () => {
 
   const handleLogin = async () => {
     const isLocalStorage = serverConfig?.StorageType === "localstorage";
-    if (!password || (!isLocalStorage && !username)) {
+    if (!password || (serverConfig?.StorageType && !isLocalStorage && !username)) {
       Toast.show({ type: "error", text1: "请输入用户名和密码" });
       return;
     }
     setIsLoading(true);
     try {
-      await api.login(isLocalStorage ? undefined : username, password);
-      await checkLoginStatus(apiBaseUrl);
+      await login(isLocalStorage ? undefined : username || undefined, password);
       await refreshPlayRecords();
 
       // Save credentials on successful login
@@ -152,7 +150,7 @@ const LoginModal = () => {
             <TextInput
               ref={usernameInputRef}
               style={styles.input}
-              placeholder="请输入用户名"
+              placeholder={serverConfig?.StorageType ? "请输入用户名" : "用户名（仅密码认证可留空）"}
               placeholderTextColor="#888"
               value={username}
               onChangeText={setUsername}
@@ -231,3 +229,4 @@ const styles = StyleSheet.create({
 });
 
 export default LoginModal;
+
