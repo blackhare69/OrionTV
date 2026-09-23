@@ -93,7 +93,25 @@ export class API {
       throw new Error("API_URL_NOT_SET");
     }
 
-    const response = await fetch(`${this.baseURL}${url}`, options);
+    const baseURL = this.baseURL;
+    const headers = new Headers(options.headers);
+    const cookies = await AsyncStorage.getItem("authCookies");
+    const cookieBaseURL = await AsyncStorage.getItem("authCookiesBaseUrl");
+    if (cookies && (!cookieBaseURL || cookieBaseURL === baseURL)) {
+      // Stored values are Set-Cookie headers, including legacy installations.
+      // Split between cookies, but not at the comma inside an Expires date.
+      const cookieHeader = cookies.split(/,(?=\s*[^;,=\s]+=)/)
+        .map(cookie => cookie.split(";")[0].trim())
+        .filter(Boolean)
+        .join("; ");
+      headers.set("Cookie", cookieHeader);
+    }
+
+    const response = await fetch(`${baseURL}${url}`, {
+      credentials: "include",
+      ...options,
+      headers,
+    });
 
     if (response.status === 401) {
       throw new Error("UNAUTHORIZED");
@@ -107,27 +125,45 @@ export class API {
   }
 
   async login(username?: string | undefined, password?: string): Promise<{ ok: boolean }> {
+    const baseURL = this.baseURL;
     const response = await this._fetch("/api/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     });
 
-    // 存储cookie到AsyncStorage
-    const cookies = response.headers.get("Set-Cookie");
-    if (cookies) {
-      await AsyncStorage.setItem("authCookies", cookies);
+    const result = await response.json();
+    if (!result.ok) {
+      throw new Error("用户名或密码错误");
+    }
+    if (this.baseURL !== baseURL) {
+      throw new Error("服务器地址已更改，请重新登录");
     }
 
-    return response.json();
+    // Keep the raw Set-Cookie value for compatibility; normalize when sending.
+    const cookies = response.headers.get("Set-Cookie");
+    if (cookies) {
+      await AsyncStorage.setItem("authCookiesBaseUrl", baseURL);
+      await AsyncStorage.setItem("authCookies", cookies);
+    } else {
+      // Some native implementations manage cookies without exposing the header.
+      await AsyncStorage.removeItem("authCookies");
+      await AsyncStorage.removeItem("authCookiesBaseUrl");
+    }
+
+    return result;
   }
 
   async logout(): Promise<{ ok: boolean }> {
-    const response = await this._fetch("/api/logout", {
-      method: "POST",
-    });
-    await AsyncStorage.setItem("authCookies", '');
-    return response.json();
+    try {
+      const response = await this._fetch("/api/logout", {
+        method: "POST",
+      });
+      return await response.json();
+    } finally {
+      await AsyncStorage.removeItem("authCookies");
+      await AsyncStorage.removeItem("authCookiesBaseUrl");
+    }
   }
 
   async getServerConfig(): Promise<ServerConfig> {
@@ -239,3 +275,4 @@ export class API {
 
 // 默认实例
 export let api = new API();
+
