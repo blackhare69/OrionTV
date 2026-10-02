@@ -100,3 +100,29 @@ test('requests without saved cookies retain native cookie handling and cancellat
   await new API('https://example.com').getResources(controller.signal);
 });
 
+
+test('login does not attach an existing auth cookie and trims username', async () => {
+  await AsyncStorage.setItem('authCookies', 'auth=stale');
+  (CookieManager.get as jest.Mock).mockResolvedValue({
+    auth: { name: 'auth', value: 'stale-native' },
+  });
+  (fetch as jest.Mock).mockImplementationOnce(async (_url, options) => {
+    expect(new Headers(options.headers).get('Cookie')).toBeNull();
+    expect(new Headers(options.headers).get('Accept')).toBe('application/json');
+    expect(JSON.parse(options.body)).toEqual({ username: 'blackhare', password: '00000000' });
+    return response({ ok: true }, 200, 'auth=fresh; Path=/');
+  });
+  await expect(new API('https://example.com').login('  blackhare  ', '00000000')).resolves.toEqual({ ok: true });
+});
+
+test('server error body is exposed for diagnostics', async () => {
+  global.fetch = jest.fn().mockResolvedValue({
+    ok: false,
+    status: 500,
+    headers: new Headers(),
+    text: async () => JSON.stringify({ error: '数据库错误' }),
+  });
+  await expect(new API('https://example.com').login('blackhare', '00000000'))
+    .rejects.toThrow('HTTP 500: 数据库错误');
+});
+
