@@ -97,25 +97,30 @@ export class API {
     const baseURL = this.baseURL;
     const headers = new Headers(options.headers);
 
-    // React Native on Android has a native cookie store. Prefer it when the
-    // MoonTV auth cookie is present so we do not duplicate/override Cookie.
-    let hasNativeAuthCookie = false;
+    // Android's CookieManager and React Native fetch do not always share the
+    // same cookie jar. Read native cookies and forward them explicitly.
+    let cookieHeader = "";
     try {
       const nativeCookies = await CookieManager.get(baseURL);
-      hasNativeAuthCookie = Boolean(nativeCookies.auth?.value);
+      cookieHeader = Object.entries(nativeCookies)
+        .filter(([, cookie]) => typeof cookie?.value === "string")
+        .map(([name, cookie]) => `${cookie.name || name}=${cookie.value}`)
+        .join("; ");
     } catch {
-      // Fall back to the legacy AsyncStorage copy below.
+      // Fall back to the AsyncStorage copy below.
     }
 
     const cookies = await AsyncStorage.getItem("authCookies");
     const cookieBaseURL = await AsyncStorage.getItem("authCookiesBaseUrl");
-    if (!hasNativeAuthCookie && cookies && (!cookieBaseURL || cookieBaseURL === baseURL)) {
+    if (!cookieHeader && cookies && (!cookieBaseURL || cookieBaseURL === baseURL)) {
       // Stored values may be Set-Cookie headers from older installations.
       // Split between cookies, but not at the comma inside an Expires date.
-      const cookieHeader = cookies.split(/,(?=\s*[^;,=\s]+=)/)
+      cookieHeader = cookies.split(/,(?=\s*[^;,=\s]+=)/)
         .map(cookie => cookie.split(";")[0].trim())
         .filter(Boolean)
         .join("; ");
+    }
+    if (cookieHeader) {
       headers.set("Cookie", cookieHeader);
     }
 

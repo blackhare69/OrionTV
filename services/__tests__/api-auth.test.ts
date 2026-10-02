@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import CookieManager from '@react-native-cookies/cookies';
 import { API } from '../api';
 
 jest.mock('@react-native-async-storage/async-storage', () =>
@@ -22,6 +23,7 @@ const response = (body: unknown, status = 200, cookie?: string) => ({
 
 beforeEach(async () => {
   await AsyncStorage.clear();
+  (CookieManager.get as jest.Mock).mockReset().mockResolvedValue({});
   global.fetch = jest.fn();
 });
 
@@ -49,6 +51,17 @@ test('legacy stored Set-Cookie is normalized and POST headers/body are preserved
     return response(['movie']);
   });
   await expect(new API('https://example.com').addSearchHistory('movie')).resolves.toEqual(['movie']);
+});
+
+test('native Android cookies are forwarded explicitly to protected requests', async () => {
+  (CookieManager.get as jest.Mock).mockResolvedValue({
+    auth: { name: 'auth', value: 'native-token' },
+  });
+  (fetch as jest.Mock).mockImplementation(async (_url, options) => {
+    expect(new Headers(options.headers).get('Cookie')).toBe('auth=native-token');
+    return response([{ key: 'source' }]);
+  });
+  await expect(new API('https://example.com').getResources()).resolves.toEqual([{ key: 'source' }]);
 });
 
 test('an unsuccessful login body cannot replace the saved session', async () => {
