@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import CookieManager from "@react-native-cookies/cookies";
 
 // region: --- Interface Definitions ---
 export interface DoubanItem {
@@ -95,10 +96,21 @@ export class API {
 
     const baseURL = this.baseURL;
     const headers = new Headers(options.headers);
+
+    // React Native on Android has a native cookie store. Prefer it when the
+    // MoonTV auth cookie is present so we do not duplicate/override Cookie.
+    let hasNativeAuthCookie = false;
+    try {
+      const nativeCookies = await CookieManager.get(baseURL);
+      hasNativeAuthCookie = Boolean(nativeCookies.auth?.value);
+    } catch {
+      // Fall back to the legacy AsyncStorage copy below.
+    }
+
     const cookies = await AsyncStorage.getItem("authCookies");
     const cookieBaseURL = await AsyncStorage.getItem("authCookiesBaseUrl");
-    if (cookies && (!cookieBaseURL || cookieBaseURL === baseURL)) {
-      // Stored values are Set-Cookie headers, including legacy installations.
+    if (!hasNativeAuthCookie && cookies && (!cookieBaseURL || cookieBaseURL === baseURL)) {
+      // Stored values may be Set-Cookie headers from older installations.
       // Split between cookies, but not at the comma inside an Expires date.
       const cookieHeader = cookies.split(/,(?=\s*[^;,=\s]+=)/)
         .map(cookie => cookie.split(";")[0].trim())
@@ -140,15 +152,43 @@ export class API {
       throw new Error("服务器地址已更改，请重新登录");
     }
 
-    // Keep the raw Set-Cookie value for compatibility; normalize when sending.
-    const cookies = response.headers.get("Set-Cookie");
-    if (cookies) {
-      await AsyncStorage.setItem("authCookiesBaseUrl", baseURL);
-      await AsyncStorage.setItem("authCookies", cookies);
+    // On Android, fetch may store cookies natively while hiding Set-Cookie
+    // from JavaScript. Import the header when it is visible, then verify the
+    // native cookie store instead of assuming response.headers is authoritative.
+    const setCookieHeader = response.headers.get("Set-Cookie");
+    if (setCookieHeader) {
+      try {
+        await CookieManager.setFromResponse(baseURL, setCookieHeader);
+      } catch {
+        // Native fetch may already have stored it; verification below decides.
+      }
+    }
+
+    try {
+      await CookieManager.flush();
+    } catch {
+      // flush is Android-specific; ignore if unavailable.
+    }
+
+    let nativeAuthValue: string | undefined;
+    try {
+      const nativeCookies = await CookieManager.get(baseURL);
+      nativeAuthValue = nativeCookies.auth?.value;
+    } catch {
+      // Fall back to the exposed response header below.
+    }
+
+    await AsyncStorage.setItem("authCookiesBaseUrl", baseURL);
+    if (nativeAuthValue) {
+      // Keep a JS-side backup for older devices whose native fetch cookie
+      // handling is unreliable, but prefer the native store on requests.
+      await AsyncStorage.setItem("authCookies", `auth=${nativeAuthValue}`);
+    } else if (setCookieHeader) {
+      await AsyncStorage.setItem("authCookies", setCookieHeader);
     } else {
-      // Some native implementations manage cookies without exposing the header.
       await AsyncStorage.removeItem("authCookies");
       await AsyncStorage.removeItem("authCookiesBaseUrl");
+      throw new Error("登录成功，但电视端未保存认证 Cookie");
     }
 
     return result;
@@ -163,6 +203,11 @@ export class API {
     } finally {
       await AsyncStorage.removeItem("authCookies");
       await AsyncStorage.removeItem("authCookiesBaseUrl");
+      try {
+        await CookieManager.clearAll();
+      } catch {
+        // Best effort: AsyncStorage session is already cleared above.
+      }
     }
   }
 
