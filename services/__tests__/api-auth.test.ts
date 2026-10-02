@@ -4,6 +4,16 @@ import { API } from '../api';
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 
+jest.mock('@react-native-cookies/cookies', () => ({
+  __esModule: true,
+  default: {
+    get: jest.fn().mockResolvedValue({}),
+    setFromResponse: jest.fn().mockResolvedValue(true),
+    flush: jest.fn().mockResolvedValue(true),
+    clearAll: jest.fn().mockResolvedValue(true),
+  },
+}));
+
 const response = (body: unknown, status = 200, cookie?: string) => ({
   ok: status >= 200 && status < 300, status,
   headers: new Headers(cookie ? { 'Set-Cookie': cookie } : {}),
