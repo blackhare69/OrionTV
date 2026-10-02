@@ -89,7 +89,7 @@ export class API {
     this.baseURL = url;
   }
 
-  private async _fetch(url: string, options: RequestInit = {}): Promise<Response> {
+  private async _fetch(url: string, options: RequestInit = {}, includeAuthCookies = true): Promise<Response> {
     if (!this.baseURL) {
       throw new Error("API_URL_NOT_SET");
     }
@@ -97,31 +97,33 @@ export class API {
     const baseURL = this.baseURL;
     const headers = new Headers(options.headers);
 
-    // Android's CookieManager and React Native fetch do not always share the
-    // same cookie jar. Read native cookies and forward them explicitly.
-    let cookieHeader = "";
-    try {
-      const nativeCookies = await CookieManager.get(baseURL);
-      cookieHeader = Object.entries(nativeCookies)
-        .filter(([, cookie]) => typeof cookie?.value === "string")
-        .map(([name, cookie]) => `${cookie.name || name}=${cookie.value}`)
-        .join("; ");
-    } catch {
-      // Fall back to the AsyncStorage copy below.
-    }
+    if (includeAuthCookies) {
+      // Android's CookieManager and React Native fetch do not always share the
+      // same cookie jar. Read native cookies and forward them explicitly.
+      let cookieHeader = "";
+      try {
+        const nativeCookies = await CookieManager.get(baseURL);
+        cookieHeader = Object.entries(nativeCookies)
+          .filter(([, cookie]) => typeof cookie?.value === "string")
+          .map(([name, cookie]) => `${cookie.name || name}=${cookie.value}`)
+          .join("; ");
+      } catch {
+        // Fall back to the AsyncStorage copy below.
+      }
 
-    const cookies = await AsyncStorage.getItem("authCookies");
-    const cookieBaseURL = await AsyncStorage.getItem("authCookiesBaseUrl");
-    if (!cookieHeader && cookies && (!cookieBaseURL || cookieBaseURL === baseURL)) {
-      // Stored values may be Set-Cookie headers from older installations.
-      // Split between cookies, but not at the comma inside an Expires date.
-      cookieHeader = cookies.split(/,(?=\s*[^;,=\s]+=)/)
-        .map(cookie => cookie.split(";")[0].trim())
-        .filter(Boolean)
-        .join("; ");
-    }
-    if (cookieHeader) {
-      headers.set("Cookie", cookieHeader);
+      const cookies = await AsyncStorage.getItem("authCookies");
+      const cookieBaseURL = await AsyncStorage.getItem("authCookiesBaseUrl");
+      if (!cookieHeader && cookies && (!cookieBaseURL || cookieBaseURL === baseURL)) {
+        // Stored values may be Set-Cookie headers from older installations.
+        // Split between cookies, but not at the comma inside an Expires date.
+        cookieHeader = cookies.split(/,(?=\s*[^;,=\s]+=)/)
+          .map(cookie => cookie.split(";")[0].trim())
+          .filter(Boolean)
+          .join("; ");
+      }
+      if (cookieHeader) {
+        headers.set("Cookie", cookieHeader);
+      }
     }
 
     const response = await fetch(`${baseURL}${url}`, {
@@ -135,7 +137,24 @@ export class API {
     }
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      let detail = "";
+      try {
+        if (typeof response.text === "function") {
+          const body = await response.text();
+          if (body) {
+            try {
+              const parsed = JSON.parse(body);
+              detail = parsed?.error || parsed?.message || body;
+            } catch {
+              detail = body;
+            }
+          }
+        }
+      } catch {
+        // Keep the generic status message if the response body cannot be read.
+      }
+      const suffix = detail ? `: ${detail.slice(0, 160)}` : "";
+      throw new Error(`HTTP ${response.status}${suffix}`);
     }
 
     return response;
@@ -143,11 +162,15 @@ export class API {
 
   async login(username?: string | undefined, password?: string): Promise<{ ok: boolean }> {
     const baseURL = this.baseURL;
+    const normalizedUsername = username?.trim() || undefined;
     const response = await this._fetch("/api/login", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+      },
+      body: JSON.stringify({ username: normalizedUsername, password }),
+    }, false);
 
     const result = await response.json();
     if (!result.ok) {
